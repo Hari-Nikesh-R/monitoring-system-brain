@@ -4,14 +4,24 @@ import cv2
 import numpy as np
 
 from config import (
+    ABNORMALITY_CONFIDENCE,
+    ABNORMALITY_MIN_HITS,
+    ABNORMALITY_MODEL,
     MAX_DISAPPEARED_FRAMES,
     MAX_MATCH_DISTANCE,
     DB_LOG_INTERVAL_FRAMES,
+    MARK_UNHEALTHY_ON_WEAK,
+    MARK_UNHEALTHY_ON_WOUND,
+    UNHEALTHY_CLASS_KEYWORDS,
+    UNHEALTHY_CLASS_THRESHOLD,
+    WEAK_CLASS_KEYWORDS,
+    WOUND_CLASS_KEYWORDS,
 )
 from database import Database
 from detector import CowDetector
 from health_monitor import HealthMonitor
 from tracker import CentroidTracker
+from abnormality_detector import AbnormalityDetector, summarize_hits
 
 
 class VideoProcessor:
@@ -32,6 +42,11 @@ class VideoProcessor:
         )
         self.health = HealthMonitor()
         self.db = Database()
+        self.abnormality = (
+            AbnormalityDetector(ABNORMALITY_MODEL, confidence=ABNORMALITY_CONFIDENCE)
+            if ABNORMALITY_MODEL
+            else None
+        )
 
         self._total_frames = 0
         self._fps_counter = 0
@@ -52,6 +67,9 @@ class VideoProcessor:
         tracked = self.tracker.update(detections)
         health_results = self.health.update(tracked)
 
+        if self.abnormality is not None and health_results:
+            self._apply_abnormality(frame, health_results)
+
         self._persist(health_results)
 
         annotated = self._draw(frame, health_results)
@@ -68,13 +86,30 @@ class VideoProcessor:
 
             cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
 
-            label = f"Cow {cow_id} | {info['movement_status']} | {info['health_status']}"
+            appearance = info.get("appearance_flags") or []
+            extra = f" | {'/'.join(appearance)}" if appearance else ""
+            label = f"Cow {cow_id} | {info['movement_status']} | {info['health_status']}{extra}"
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1)
             cv2.rectangle(out, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
             cv2.putText(out, label, (x1 + 2, y1 - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
 
             cv2.circle(out, (cx, cy), 4, color, -1)
+
+            for hit in info.get("abnormality_hits", []) or []:
+                ax1, ay1, ax2, ay2 = (int(v) for v in hit["bbox"])
+                cv2.rectangle(out, (ax1, ay1), (ax2, ay2), (255, 0, 255), 2)
+                txt = f"{hit['label']} {hit['conf']:.2f}"
+                cv2.putText(
+                    out,
+                    txt,
+                    (ax1, max(0, ay1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 0, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
 
         cv2.putText(out, f"FPS: {self.fps:.1f}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
@@ -96,6 +131,83 @@ class VideoProcessor:
                 )
             for msg in info["alerts"]:
                 self.db.log_alert(cow_id, info["health_status"], msg)
+
+    # -- abnormality ----------------------------------------------------------
+
+    def _apply_abnormality(self, frame: np.ndarray, results: dict):
+        for cow_id, info in results.items():
+            x1, y1, x2, y2 = (int(v) for v in info["bbox"])
+            x1c, y1c = max(0, x1), max(0, y1)
+            x2c, y2c = min(frame.shape[1], x2), min(frame.shape[0], y2)
+            if x2c <= x1c or y2c <= y1c:
+                continue
+
+            crop = frame[y1c:y2c, x1c:x2c]
+            # Classification model: decide unhealthy directly from label/prob
+            if self.abnormality.task == "classify":
+                out = self.abnormality.classify(crop)
+                if out is None:
+                    continue
+                label, prob = out
+                info["appearance_flags"] = [f"{label} {prob:.2f}"]
+
+                is_unhealthy = (
+                    prob >= UNHEALTHY_CLASS_THRESHOLD
+                    and any(k.lower() in label.lower() for k in UNHEALTHY_CLASS_KEYWORDS)
+                )
+                if is_unhealthy:
+                    info["health_status"] = "Alert"
+                    info["alerts"].append(
+                        f"Cow {cow_id} abnormality: {label} ({prob:.2f})"
+                    )
+                continue
+
+            # Detection model: use keyword-matching on detected labels
+            hits = self.abnormality.detect(crop)
+            if not hits:
+                continue
+
+            summary = summarize_hits(hits, WOUND_CLASS_KEYWORDS, WEAK_CLASS_KEYWORDS)
+            wound_hits = summary["wound_hits"]
+            weak_hits = summary["weak_hits"]
+
+            appearance_flags: list[str] = []
+            if wound_hits:
+                appearance_flags.append("Wound")
+            if weak_hits:
+                appearance_flags.append("Weak")
+
+            mapped_hits: list[dict] = []
+            for h in hits:
+                mapped_hits.append(
+                    {
+                        "label": h.label,
+                        "conf": h.conf,
+                        "bbox": (
+                            float(x1c + h.x1),
+                            float(y1c + h.y1),
+                            float(x1c + h.x2),
+                            float(y1c + h.y2),
+                        ),
+                    }
+                )
+
+            info["appearance_flags"] = appearance_flags
+            info["abnormality_hits"] = mapped_hits
+
+            hits_count = len(wound_hits) + len(weak_hits)
+            should_alert = hits_count >= ABNORMALITY_MIN_HITS and (
+                (MARK_UNHEALTHY_ON_WOUND and len(wound_hits) > 0)
+                or (MARK_UNHEALTHY_ON_WEAK and len(weak_hits) > 0)
+            )
+            if should_alert:
+                info["health_status"] = "Alert"
+                if wound_hits:
+                    info["alerts"].append(f"Cow {cow_id} abnormality: wound detected")
+                if weak_hits:
+                    info["alerts"].append(
+                        f"Cow {cow_id} abnormality: weak body condition detected"
+                    )
 
     # -- fps ------------------------------------------------------------------
 

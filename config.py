@@ -16,6 +16,35 @@ COW_CLASS_NAME = "cow"
 DETECT_ALL_CLASSES = False
 
 # ---------------------------------------------------------------------------
+# Appearance-based abnormality detection (optional)
+#
+# Provide a custom model to detect "unhealthy by appearance".
+#
+# Supported model types:
+# - YOLO "detect" model: detects objects like "wound", "injury", "weak", etc.
+# - YOLO "classify" model: outputs class probabilities like "healthy"/"unhealthy".
+#
+# If ABNORMALITY_MODEL is None/empty, appearance-based health is disabled.
+# ---------------------------------------------------------------------------
+ABNORMALITY_MODEL = "runs/classify/train-4/weights/best.pt"  # trained healthy/unhealthy classifier
+ABNORMALITY_CONFIDENCE = 0.35
+
+# Class-name keywords produced by the abnormality model
+WOUND_CLASS_KEYWORDS = ("wound", "injury", "lesion", "ulcer", "cut", "bleeding")
+WEAK_CLASS_KEYWORDS = ("weak", "thin", "emaciated", "bcs_low", "poor_condition")
+
+# If any of these are detected on a cow, mark the cow as unhealthy (Alert).
+MARK_UNHEALTHY_ON_WOUND = True
+MARK_UNHEALTHY_ON_WEAK = True
+
+# Minimum number of abnormal detections to trigger
+ABNORMALITY_MIN_HITS = 1
+
+# Classifier mode (YOLO task=classify) configuration
+UNHEALTHY_CLASS_KEYWORDS = ("unhealthy", "sick", "weak", "thin", "emaciated")
+UNHEALTHY_CLASS_THRESHOLD = 0.70  # probability threshold to mark cow as unhealthy
+
+# ---------------------------------------------------------------------------
 # Centroid tracker
 # ---------------------------------------------------------------------------
 MAX_DISAPPEARED_FRAMES = 40   # frames with no match before dropping a track

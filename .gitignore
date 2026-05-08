@@ -1,0 +1,60 @@
+# --- OS / Editor ------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+.vscode/
+.idea/
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Virtual environments
+venv/
+.venv/
+
+# --- App / runtime artifacts ------------------------------------------------
+# Local SQLite DB created by the app
+*.db
+
+# Temporary uploads / files (Streamlit / general)
+*.tmp
+
+# --- ML / CV artifacts -------------------------------------------------------
+# Ultralytics / training outputs
+runs/
+
+# Downloaded datasets / caches
+.cache/
+
+# Prepared local training datasets (symlinks/caches)
+datasets/
+
+# Model weights / exports (keep out of git by default)
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.engine
+
+# Large media / demo assets (keep out of git)
+trained/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Archives
+*.zip
+

@@ -145,11 +145,13 @@ if run:
         if results:
             rows = []
             for cid, info in results.items():
+                appearance = info.get("appearance_flags") or []
                 rows.append(
                     {
                         "Cow ID": cid,
                         "Movement": info["movement_status"],
                         "Health": info["health_status"],
+                        "Appearance": ", ".join(appearance) if appearance else "-",
                         "X": int(info["centroid"][0]),
                         "Y": int(info["centroid"][1]),
                     }
